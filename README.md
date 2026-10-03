@@ -14,6 +14,7 @@ A single model response can be plausible but incomplete, overly confident, or an
 
 ```mermaid
 flowchart TD
+    classDef default fill:#0D1117,stroke:#58A6FF,color:#F0F6FC,stroke-width:2px;
     A[Problem statement] --> B[Generate diverse strategies]
     B --> C[Run repeated rubric evaluations]
     C --> D[Calculate weighted scores in Python]
@@ -90,7 +91,7 @@ multi-branch-ai-strategy-engine/
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/multi-branch-ai-strategy-engine.git
+git clone https://github.com/danial-soltani/multi-branch-ai-strategy-engine.git
 cd multi-branch-ai-strategy-engine
 
 python -m venv .venv
