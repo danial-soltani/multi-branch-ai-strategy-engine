@@ -14,7 +14,6 @@ A single model response can be plausible but incomplete, overly confident, or an
 
 ```mermaid
 flowchart TD
-    classDef default fill:#0D1117,stroke:#58A6FF,color:#F0F6FC,stroke-width:2px;
     A[Problem statement] --> B[Generate diverse strategies]
     B --> C[Run repeated rubric evaluations]
     C --> D[Calculate weighted scores in Python]
@@ -22,6 +21,8 @@ flowchart TD
     E --> F[Select the top two strategies]
     F --> G[Synthesize a testable action plan]
     G --> H[Save validated JSON report]
+    classDef readable fill:#161B22,stroke:#58A6FF,color:#F0F6FC,stroke-width:2px;
+    class A,B,C,D,E,F,G,H readable;
 ```
 
 ## Key features
