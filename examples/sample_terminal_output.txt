@@ -1,0 +1,24 @@
+INFO: Generating 4 diverse approaches...
+INFO: Running independent evaluations...
+INFO: Synthesizing the two strongest approaches...
+
+========================================================================
+RANKING
+========================================================================
+1. Identity Embedding Gate | median=8.55/10 | judge spread=0.20
+2. Multi-Angle Reference Pack | median=8.20/10 | judge spread=0.35
+3. Regenerate-on-Failure Loop | median=7.65/10 | judge spread=0.50
+4. Manual Review Baseline | median=6.95/10 | judge spread=0.30
+
+========================================================================
+Identity-Consistency QA Pipeline
+========================================================================
+Build a reference-driven generation workflow with automated identity checks,
+targeted regeneration, and an auditable approval gate.
+
+First 72 hours:
+- Define the identity reference standard and acceptance threshold.
+- Create a small multi-angle validation dataset.
+- Implement a baseline similarity check and log false accepts/rejects.
+
+Full JSON report: /project/tot_report.json

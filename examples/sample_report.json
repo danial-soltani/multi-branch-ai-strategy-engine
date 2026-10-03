@@ -1,0 +1,75 @@
+{
+  "notice": "Illustrative portfolio sample; not the output of a live API run.",
+  "problem": "Design an automated QA pipeline for controlled AI image generation to prevent character face drift across multiple camera angles.",
+  "model": "configured-at-runtime",
+  "weights": {
+    "feasibility": 0.25,
+    "scalability": 0.15,
+    "risk_mitigation": 0.25,
+    "expected_impact": 0.25,
+    "evidence_quality": 0.1
+  },
+  "ranking": [
+    {
+      "rank": 1,
+      "approach": {
+        "name": "Identity Embedding Gate",
+        "perspective": "highest quality and reliability",
+        "summary": "Validate every generated frame against approved identity references and reject outputs below a calibrated similarity threshold.",
+        "key_mechanism": "Reference embeddings, pose-aware thresholds, targeted regeneration, and a final approval gate."
+      },
+      "median_score": 8.55,
+      "score_spread": 0.2,
+      "evaluations": [
+        {
+          "feasibility": 8,
+          "scalability": 9,
+          "risk_mitigation": 9,
+          "expected_impact": 9,
+          "evidence_quality": 8,
+          "fatal_flaw": null,
+          "rationale": "The mechanism is measurable, automatable, and directly connected to identity consistency.",
+          "improvement": "Calibrate separate thresholds for frontal, profile, and high-occlusion views."
+        }
+      ]
+    }
+  ],
+  "final_plan": {
+    "title": "Identity-Consistency QA Pipeline",
+    "executive_summary": "Create approved multi-angle references, measure identity similarity after generation, and route failed frames through targeted regeneration before final approval.",
+    "why_this_plan": "It combines an automated quality gate with reference coverage for difficult camera angles and keeps every decision testable.",
+    "action_steps": [
+      {
+        "order": 1,
+        "action": "Create and approve a multi-angle identity reference pack.",
+        "owner_or_component": "Reference preparation",
+        "deliverable": "Versioned reference pack",
+        "acceptance_test": "The pack contains approved frontal, three-quarter, profile, and difficult-angle references."
+      },
+      {
+        "order": 2,
+        "action": "Implement similarity scoring and targeted regeneration for failed frames.",
+        "owner_or_component": "QA service",
+        "deliverable": "Automated identity gate",
+        "acceptance_test": "Known drift examples fail while approved validation frames pass at the calibrated threshold."
+      }
+    ],
+    "failure_controls": [
+      {
+        "failure_mode": "Profile views receive false rejection scores.",
+        "early_signal": "Reject rate increases sharply for profile poses.",
+        "control": "Use pose-aware thresholds and profile-specific references."
+      }
+    ],
+    "success_metrics": [
+      "Identity-drift escape rate",
+      "False rejection rate by pose",
+      "Average regeneration attempts per accepted frame"
+    ],
+    "first_72_hours": [
+      "Define the identity reference standard.",
+      "Create a small multi-angle validation dataset.",
+      "Implement and benchmark a baseline similarity check."
+    ]
+  }
+}

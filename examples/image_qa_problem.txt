@@ -1,0 +1,1 @@
+Design an automated QA pipeline for controlled AI image generation to prevent character face drift across multiple camera angles.
