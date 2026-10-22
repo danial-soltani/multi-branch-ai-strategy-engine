@@ -136,6 +136,8 @@ async def await_with_timeout(awaitable, timeout_seconds: float):
 
 def is_retryable_error(exc: Exception) -> bool:
     """Retry only transient API/network failures, never schema or auth errors."""
+    if isinstance(exc, PermissionError):
+        return False
     if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
         return True
     if isinstance(exc, genai_errors.APIError):
