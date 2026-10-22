@@ -1,7 +1,7 @@
+import asyncio
 import statistics
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from google.genai import errors as genai_errors
 
 from strategy_engine import (
@@ -25,8 +25,7 @@ def evaluation(score: int) -> Evaluation:
     )
 
 
-@pytest.mark.asyncio
-async def test_even_judge_count_uses_true_median():
+def test_even_judge_count_uses_true_median():
     approach = StrategicApproach(
         name="Test strategy",
         perspective="Reliability first",
@@ -35,9 +34,9 @@ async def test_even_judge_count_uses_true_median():
     )
     with patch("strategy_engine.evaluate_once", new_callable=AsyncMock) as mock:
         mock.side_effect = [evaluation(2), evaluation(8)]
-        result = await evaluate_approach(
+        result = asyncio.run(evaluate_approach(
             None, Settings(judges_per_branch=2), "Test problem", approach, None
-        )
+        ))
     assert result["median_score"] == statistics.median([2, 8]) == 5
 
 
