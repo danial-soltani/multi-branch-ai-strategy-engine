@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import logging
+import statistics
 import os
 import random
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -132,6 +134,15 @@ async def await_with_timeout(awaitable, timeout_seconds: float):
         return await awaitable
 
 
+def is_retryable_error(exc: Exception) -> bool:
+    """Retry only transient API/network failures, never schema or auth errors."""
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
+    if isinstance(exc, genai_errors.APIError):
+        return getattr(exc, "code", None) in (408, 409, 429, 500, 502, 503, 504)
+    return False
+
+
 async def generate_typed(
     client: genai.Client,
     settings: Settings,
@@ -164,9 +175,9 @@ async def generate_typed(
                 if not response.text:
                     raise ValueError("Gemini returned an empty response.")
                 return schema.model_validate_json(response.text)
-            except Exception as exc:  # SDK/network/schema errors are retried together.
+            except Exception as exc:
                 last_error = exc
-                if attempt == settings.max_attempts:
+                if attempt == settings.max_attempts or not is_retryable_error(exc):
                     break
                 delay = settings.retry_base_seconds * (2 ** (attempt - 1))
                 delay += random.uniform(0, 0.35 * delay)
@@ -253,7 +264,7 @@ async def evaluate_approach(
         ]
     )
     scores = sorted(weighted_score(item) for item in evaluations)
-    median_score = scores[len(scores) // 2]
+    median_score = statistics.median(scores)
     fatal_flaws = [item.fatal_flaw for item in evaluations if item.fatal_flaw]
     return {
         "approach": approach,
