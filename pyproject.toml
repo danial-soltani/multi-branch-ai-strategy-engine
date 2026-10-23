@@ -28,5 +28,5 @@ pythonpath = ["src"]
 addopts = "-q"
 
 [tool.setuptools]
-py-modules = ["strategy_engine"]
+py-modules = ["strategy_engine", "agent_hq_adapter"]
 package-dir = { "" = "src" }
