@@ -1,0 +1,88 @@
+name: Sol Solly environment probe
+
+# Proposal only: publishing this file to the named branch triggers one job.
+# No n8n code, credentials, or internal assets are included.
+on:
+  push:
+    branches: [sol-solly/environment-probe]
+    paths: [.github/workflows/sol-solly-environment-probe.yml]
+
+permissions: {}
+
+concurrency:
+  group: sol-solly-environment-probe
+  cancel-in-progress: false
+
+jobs:
+  environment:
+    if: github.repository == 'danial-soltani/multi-branch-ai-strategy-engine' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Inspect prerequisites without installing or running workloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import platform
+          import re
+          import shutil
+          import subprocess
+          import sys
+
+          def inspect(command):
+              executable = shutil.which(command[0])
+              if executable is None:
+                  return None, "MISSING"
+              try:
+                  completed = subprocess.run(
+                      [executable, *command[1:]],
+                      capture_output=True, text=True, timeout=15,
+                      env={"PATH": os.defpath}, check=False,
+                  )
+              except (OSError, subprocess.TimeoutExpired):
+                  return None, "PROBE_ERROR"
+              if completed.returncode != 0:
+                  return None, "COMMAND_FAILED"
+              return completed.stdout.strip(), "OBSERVED"
+
+          node_output, node_status = inspect(["node", "--version"])
+          node_match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", node_output or "")
+          node_version = node_match.group(0) if node_match else None
+          node_supported = bool(node_match and int(node_match.group(1)) >= 24)
+
+          docker_output, docker_status = inspect(["docker", "version", "--format", "{{json .Server}}"])
+          try:
+              server = json.loads(docker_output or "null")
+          except (ValueError, TypeError):
+              server = None
+          docker_linux = isinstance(server, dict) and server.get("Os") == "linux"
+          version = server.get("Version") if isinstance(server, dict) else None
+          docker_version = version if isinstance(version, str) and re.fullmatch(r"[0-9][0-9A-Za-z.+_-]{0,63}", version) else None
+          prerequisites = platform.system() == "Linux" and docker_linux and node_supported
+          report = {
+              "scope": "ENVIRONMENT_PREREQUISITES_ONLY",
+              "prerequisites_status": "OBSERVED_AVAILABLE" if prerequisites else "BLOCKED",
+              "platform": platform.system(),
+              "python_version": platform.python_version(),
+              "node_probe": node_status,
+              "node_version": node_version,
+              "node_at_least_24": node_supported,
+              "docker_probe": docker_status,
+              "docker_server_version": docker_version,
+              "docker_server_linux": docker_linux,
+              "container_isolation_verified": False,
+              "n8n_engine_loaded": False,
+              "n8n_workflow_tests_run": 0,
+              "operational_use_allowed": False,
+          }
+          rendered = json.dumps(report, indent=2, sort_keys=True)
+          print(rendered)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as target:
+                  target.write("## Environment prerequisites only\n\n```json\n" + rendered + "\n```\n")
+          sys.exit(0 if prerequisites else 2)
+          PY
