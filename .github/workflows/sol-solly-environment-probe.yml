@@ -1,88 +1,196 @@
 name: Sol Solly environment probe
-
-# Proposal only: publishing this file to the named branch triggers one job.
-# No n8n code, credentials, or internal assets are included.
 on:
   push:
     branches: [sol-solly/environment-probe]
     paths: [.github/workflows/sol-solly-environment-probe.yml]
-
 permissions: {}
-
 concurrency:
   group: sol-solly-environment-probe
   cancel-in-progress: false
-
 jobs:
   environment:
     if: github.repository == 'danial-soltani/multi-branch-ai-strategy-engine' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Inspect prerequisites without installing or running workloads
+      - name: Observe owned container controls with pinned Node runtime
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          python3 - <<'OWNED_CONTROLS_PY'
+          PROBE_JS = "import fs from 'node:fs';\nimport os from 'node:os';\n\nconst checks = {};\nfunction observe(name, inspect) {\n  try { checks[name] = inspect() === true; }\n  catch { checks[name] = false; }\n}\nconst status = fs.readFileSync('/proc/self/status', 'utf8');\nconst mounts = fs.readFileSync('/proc/mounts', 'utf8').trim().split('\\n').map(line => line.split(' '));\nfunction mountAt(path) { return mounts.find(parts => parts[1] === path); }\nfunction restrictedMount(path, required) {\n  const row = mountAt(path);\n  return !!row && required.every(flag => row[3].split(',').includes(flag));\n}\nobserve('pinned_node_version', () => process.versions.node === '24.22.2' && process.platform === 'linux' && process.arch === 'x64');\nobserve('non_root_uid_gid', () => process.getuid() === 1000 && process.getgid() === 1000);\nobserve('no_linux_capabilities', () => /^CapEff:\\s+0+$/m.test(status));\nobserve('no_new_privileges', () => /^NoNewPrivs:\\s+1$/m.test(status));\nobserve('root_filesystem_readonly', () => {\n  let denied = false;\n  try { fs.writeFileSync('/owned-probe-must-not-write', 'synthetic'); }\n  catch (error) { denied = error.code === 'EROFS' || error.code === 'EACCES'; }\n  return denied && restrictedMount('/', ['ro']) && restrictedMount('/probe', ['ro']);\n});\nobserve('tmpfs_writable_restricted', () => {\n  const path = '/tmp/owned-public-canary';\n  fs.writeFileSync(path, 'public-synthetic', { flag: 'wx' });\n  const equal = fs.readFileSync(path, 'utf8') === 'public-synthetic';\n  fs.unlinkSync(path);\n  return equal && mountAt('/tmp')[2] === 'tmpfs' && restrictedMount('/tmp', ['rw', 'noexec', 'nosuid', 'nodev']);\n});\nobserve('only_loopback_interfaces', () => {\n  const interfaces = Object.keys(os.networkInterfaces());\n  return interfaces.length === 1 && interfaces[0] === 'lo';\n});\nobserve('host_paths_and_marker_absent', () =>\n  ['/var/run/docker.sock', '/home/runner', '/github/workspace'].every(path => !fs.existsSync(path)) &&\n  !Object.hasOwn(process.env, 'HOST_ONLY_MARKER'));\nobserve('resource_limits_observed', () => {\n  const read = name => fs.readFileSync('/sys/fs/cgroup/' + name, 'utf8').trim();\n  return read('memory.max') === '134217728' && read('memory.swap.max') === '0' &&\n    read('pids.max') === '64' && read('cpu.max') === '50000 100000';\n});\nobserve('environment_allowlist', () => {\n  const allowed = new Set(['PATH', 'NODE_VERSION', 'YARN_VERSION', 'HOME', 'HOSTNAME', 'PROBE_PUBLIC_SENTINEL']);\n  return Object.keys(process.env).every(key => allowed.has(key)) && process.env.HOME === '/tmp' &&\n    process.env.PROBE_PUBLIC_SENTINEL === 'public-synthetic';\n});\nconsole.log(JSON.stringify({ scope: 'OWNED_CONTAINER_CONTROL_OBSERVATIONS_ONLY', node_version: process.versions.node, checks }));\n// Report false observations as data. The host gate sets the final result.\n"
+          """Owned container-control experiment. Never loads n8n or project assets."""
+          import hashlib
           import json
           import os
-          import platform
+          from pathlib import Path
           import re
           import shutil
           import subprocess
-          import sys
+          import tempfile
 
-          def inspect(command):
-              executable = shutil.which(command[0])
-              if executable is None:
-                  return None, "MISSING"
-              try:
-                  completed = subprocess.run(
-                      [executable, *command[1:]],
-                      capture_output=True, text=True, timeout=15,
-                      env={"PATH": os.defpath}, check=False,
-                  )
-              except (OSError, subprocess.TimeoutExpired):
-                  return None, "PROBE_ERROR"
-              if completed.returncode != 0:
-                  return None, "COMMAND_FAILED"
-              return completed.stdout.strip(), "OBSERVED"
-
-          node_output, node_status = inspect(["node", "--version"])
-          node_match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", node_output or "")
-          node_version = node_match.group(0) if node_match else None
-          node_supported = bool(node_match and int(node_match.group(1)) >= 24)
-
-          docker_output, docker_status = inspect(["docker", "version", "--format", "{{json .Server}}"])
-          try:
-              server = json.loads(docker_output or "null")
-          except (ValueError, TypeError):
-              server = None
-          docker_linux = isinstance(server, dict) and server.get("Os") == "linux"
-          version = server.get("Version") if isinstance(server, dict) else None
-          docker_version = version if isinstance(version, str) and re.fullmatch(r"[0-9][0-9A-Za-z.+_-]{0,63}", version) else None
-          prerequisites = platform.system() == "Linux" and docker_linux and node_supported
-          report = {
-              "scope": "ENVIRONMENT_PREREQUISITES_ONLY",
-              "prerequisites_status": "OBSERVED_AVAILABLE" if prerequisites else "BLOCKED",
-              "platform": platform.system(),
-              "python_version": platform.python_version(),
-              "node_probe": node_status,
-              "node_version": node_version,
-              "node_at_least_24": node_supported,
-              "docker_probe": docker_status,
-              "docker_server_version": docker_version,
-              "docker_server_linux": docker_linux,
-              "container_isolation_verified": False,
-              "n8n_engine_loaded": False,
-              "n8n_workflow_tests_run": 0,
-              "operational_use_allowed": False,
+          IMAGE = 'node@sha256:a43f7fc3e52e87d12a905f46eea0275def84ca8f2981a5b53fed44d7fb398ee0'
+          TMPFS = 'rw,noexec,nosuid,nodev,size=16m,mode=1777'
+          ENV_KEYS = {'PATH', 'NODE_VERSION', 'YARN_VERSION', 'HOME', 'PROBE_PUBLIC_SENTINEL'}
+          CHECKS = {
+              'pinned_node_version', 'non_root_uid_gid', 'no_linux_capabilities',
+              'no_new_privileges', 'root_filesystem_readonly', 'tmpfs_writable_restricted',
+              'only_loopback_interfaces', 'host_paths_and_marker_absent',
+              'resource_limits_observed', 'environment_allowlist',
           }
-          rendered = json.dumps(report, indent=2, sort_keys=True)
-          print(rendered)
-          summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          if summary:
-              with open(summary, "a", encoding="utf-8") as target:
-                  target.write("## Environment prerequisites only\n\n```json\n" + rendered + "\n```\n")
-          sys.exit(0 if prerequisites else 2)
-          PY
+
+          class GateError(Exception):
+              pass
+
+          def validate_config(info, image_id, source):
+              """Fail closed before docker start; output contains no inspected values."""
+              def require(condition):
+                  if not condition:
+                      raise GateError('CONTAINER_CONFIG_REJECTED')
+              try:
+                  c, h = info['Config'], info['HostConfig']
+                  require(info['Image'] == image_id and info['State']['Status'] == 'created')
+                  require(c['Image'] == IMAGE and c['User'] == '1000:1000')
+                  require(c['Entrypoint'] == ['node'] and c['Cmd'] == ['/probe/runtime_probe.mjs'])
+                  require(c['WorkingDir'] == '/tmp')
+                  require(h['NetworkMode'] == 'none' and h['Privileged'] is False)
+                  require(h['ReadonlyRootfs'] is True and h['CapDrop'] == ['ALL'])
+                  require(not h.get('CapAdd') and h['SecurityOpt'] == ['no-new-privileges:true'])
+                  require(h['PidMode'] == '' and h['IpcMode'] == 'none')
+                  for key, value in {'PidsLimit': 64, 'Memory': 134217728,
+                                     'MemorySwap': 134217728, 'NanoCpus': 500000000}.items():
+                      require(type(h[key]) is int and h[key] == value)
+                  for key in ['PortBindings', 'Devices', 'Binds', 'VolumesFrom', 'ExtraHosts']:
+                      require(not h.get(key))
+                  require(h['Tmpfs'] == {'/tmp': TMPFS})
+                  mounts = info['Mounts']
+                  require(isinstance(mounts, list) and len(mounts) in (1, 2))
+                  binds = [mount for mount in mounts if mount['Type'] == 'bind']
+                  temporary = [mount for mount in mounts if mount['Type'] == 'tmpfs']
+                  require(len(binds) == 1 and len(temporary) <= 1)
+                  require(len(binds) + len(temporary) == len(mounts))
+                  for temporary_mount in temporary:
+                      require(temporary_mount['Destination'] == '/tmp')
+                      require(not temporary_mount.get('Source') and temporary_mount['RW'] is True)
+                  mount = binds[0]
+                  require(mount['Type'] == 'bind' and mount['Source'] == source)
+                  require(mount['Destination'] == '/probe' and mount['RW'] is False)
+                  environment = {}
+                  for entry in c['Env']:
+                      key, value = entry.split('=', 1)
+                      require(key in ENV_KEYS and key not in environment)
+                      environment[key] = value
+                  require(set(environment) == ENV_KEYS)
+                  require(environment['NODE_VERSION'] == '24.22.2')
+                  require(environment['HOME'] == '/tmp')
+                  require(environment['PROBE_PUBLIC_SENTINEL'] == 'public-synthetic')
+                  require(isinstance(environment['PATH'], str) and environment['PATH'])
+                  return True
+              except (KeyError, TypeError, ValueError, AssertionError, AttributeError, IndexError):
+                  raise GateError('CONTAINER_CONFIG_REJECTED') from None
+
+          def run_probe(probe_js):
+              result = {
+                  'scope': 'OWNED_CONTAINER_CONTROL_OBSERVATIONS_ONLY',
+                  'status': 'BLOCKED', 'image_ref': IMAGE, 'image_id': None,
+                  'probe_sha256': hashlib.sha256(probe_js.encode()).hexdigest(),
+                  'configuration_gate_passed': False, 'runtime_checks': {},
+                  'container_cleanup_confirmed': None,
+                  'container_controls_observed': False, 'sandbox_security_verified': False,
+                  'n8n_engine_loaded': False, 'n8n_workflow_tests_run': 0,
+                  'operational_use_allowed': False,
+              }
+              docker = shutil.which('docker')
+              if docker is None:
+                  return {**result, 'blocker': 'DOCKER_MISSING'}
+              with tempfile.TemporaryDirectory(prefix='owned-controls-') as work:
+                  directory = Path(work)
+                  client_home = directory / 'client'
+                  client_home.mkdir()
+                  inputs = directory / 'probe'
+                  inputs.mkdir(mode=0o755)
+                  (inputs / 'runtime_probe.mjs').write_text(probe_js)
+                  (inputs / 'runtime_probe.mjs').chmod(0o644)
+                  environment = {'PATH': os.defpath, 'HOME': str(client_home),
+                                 'DOCKER_CONFIG': str(client_home / 'docker'),
+                                 'HOST_ONLY_MARKER': 'synthetic-do-not-forward'}
+                  def command(arguments, timeout=20):
+                      try:
+                          response = subprocess.run([docker, *arguments], capture_output=True,
+                                                    text=True, timeout=timeout, env=environment,
+                                                    check=False)
+                      except (OSError, subprocess.TimeoutExpired):
+                          raise GateError('DOCKER_COMMAND_ERROR') from None
+                      if response.returncode != 0:
+                          raise GateError('DOCKER_COMMAND_FAILED')
+                      return response.stdout.strip()
+                  container = None
+                  try:
+                      command(['pull', '--platform', 'linux/amd64', IMAGE], timeout=120)
+                      image = json.loads(command(['image', 'inspect', IMAGE]))[0]
+                      image_id = image['Id']
+                      if not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
+                          raise GateError('IMAGE_METADATA_REJECTED')
+                      if image.get('Os') != 'linux' or image.get('Architecture') != 'amd64':
+                          raise GateError('IMAGE_METADATA_REJECTED')
+                      if not any(ref.split('@')[-1] == IMAGE.split('@')[1] for ref in image.get('RepoDigests', [])):
+                          raise GateError('IMAGE_DIGEST_REJECTED')
+                      result['image_id'] = image_id
+                      arguments = ['create', '--pull=never', '--platform=linux/amd64',
+                                   '--network=none', '--read-only', '--cap-drop=ALL',
+                                   '--security-opt=no-new-privileges:true', '--ipc=none',
+                                   '--pids-limit=64', '--memory=128m', '--memory-swap=128m',
+                                   '--cpus=0.5', '--user=1000:1000', '--workdir=/tmp',
+                                   '--tmpfs=/tmp:' + TMPFS,
+                                   '--mount=type=bind,src=' + str(inputs) + ',dst=/probe,readonly',
+                                   '--env=HOME=/tmp', '--env=PROBE_PUBLIC_SENTINEL=public-synthetic',
+                                   '--entrypoint=node', IMAGE, '/probe/runtime_probe.mjs']
+                      container = command(arguments)
+                      if not re.fullmatch(r'[0-9a-f]{64}', container):
+                          raise GateError('CONTAINER_ID_REJECTED')
+                      configuration = json.loads(command(['inspect', container]))[0]
+                      validate_config(configuration, image_id, str(inputs))
+                      result['configuration_gate_passed'] = True
+                      observed = json.loads(command(['start', '--attach', container], timeout=45))
+                      checks = observed.get('checks')
+                      if not isinstance(checks, dict) or set(checks) != CHECKS:
+                          raise GateError('RUNTIME_REPORT_REJECTED')
+                      if any(type(value) is not bool for value in checks.values()):
+                          raise GateError('RUNTIME_REPORT_REJECTED')
+                      result['runtime_checks'] = checks
+                      result['node_version'] = observed.get('node_version')
+                      state = json.loads(command(['inspect', container]))[0]['State']
+                      if not all(checks.values()) or state['ExitCode'] != 0 or state['OOMKilled']:
+                          raise GateError('RUNTIME_CONTROL_CHECK_FAILED')
+                      result['container_controls_observed'] = True
+                      result['status'] = 'ENVIRONMENT_CONTROLS_OBSERVED'
+                  except GateError as error:
+                      result['blocker'] = str(error)
+                  except (KeyError, ValueError, TypeError, IndexError, AttributeError):
+                      result['blocker'] = 'PROBE_RESPONSE_REJECTED'
+                  finally:
+                      if container and re.fullmatch(r'[0-9a-f]{64}', container):
+                          try:
+                              command(['rm', '--force', container])
+                              result['container_cleanup_confirmed'] = True
+                          except GateError:
+                              result['container_cleanup_confirmed'] = False
+                              result['status'] = 'BLOCKED'
+                              result['container_controls_observed'] = False
+                              result['blocker'] = 'CONTAINER_CLEANUP_FAILED'
+              return result
+
+          if __name__ == '__main__':
+              import sys
+              source = globals().get('PROBE_JS')
+              if source is None:
+                  source = Path(__file__).with_name('runtime_probe.mjs').read_text()
+              report = run_probe(source)
+              rendered = json.dumps(report, indent=2, sort_keys=True)
+              print(rendered)
+              if os.environ.get('GITHUB_STEP_SUMMARY'):
+                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as target:
+                      target.write('## Owned container observations\n\n```json\n' + rendered + '\n```\n')
+              sys.exit(0 if report['status'] == 'ENVIRONMENT_CONTROLS_OBSERVED' else 2)
+
+          OWNED_CONTROLS_PY
