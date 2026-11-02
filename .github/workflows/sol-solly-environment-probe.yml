@@ -11,15 +11,16 @@ jobs:
   environment:
     if: github.repository == 'danial-soltani/multi-branch-ai-strategy-engine' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Observe owned container controls with pinned Node runtime
+      - name: Run owned synthetic workflow through pinned real n8n engine
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'OWNED_CONTROLS_PY'
-          PROBE_JS = "import fs from 'node:fs';\nimport os from 'node:os';\n\nconst checks = {};\nfunction observe(name, inspect) {\n  try { checks[name] = inspect() === true; }\n  catch { checks[name] = false; }\n}\nconst status = fs.readFileSync('/proc/self/status', 'utf8');\nconst mounts = fs.readFileSync('/proc/mounts', 'utf8').trim().split('\\n').map(line => line.split(' '));\nfunction mountAt(path) { return mounts.find(parts => parts[1] === path); }\nfunction restrictedMount(path, required) {\n  const row = mountAt(path);\n  return !!row && required.every(flag => row[3].split(',').includes(flag));\n}\nobserve('pinned_node_version', () => process.versions.node === '24.22.2' && process.platform === 'linux' && process.arch === 'x64');\nobserve('non_root_uid_gid', () => process.getuid() === 1000 && process.getgid() === 1000);\nobserve('no_linux_capabilities', () => /^CapEff:\\s+0+$/m.test(status));\nobserve('no_new_privileges', () => /^NoNewPrivs:\\s+1$/m.test(status));\nobserve('root_filesystem_readonly', () => {\n  let denied = false;\n  try { fs.writeFileSync('/owned-probe-must-not-write', 'synthetic'); }\n  catch (error) { denied = error.code === 'EROFS' || error.code === 'EACCES'; }\n  return denied && restrictedMount('/', ['ro']) && restrictedMount('/probe', ['ro']);\n});\nobserve('tmpfs_writable_restricted', () => {\n  const path = '/tmp/owned-public-canary';\n  fs.writeFileSync(path, 'public-synthetic', { flag: 'wx' });\n  const equal = fs.readFileSync(path, 'utf8') === 'public-synthetic';\n  fs.unlinkSync(path);\n  return equal && mountAt('/tmp')[2] === 'tmpfs' && restrictedMount('/tmp', ['rw', 'noexec', 'nosuid', 'nodev']);\n});\nobserve('only_loopback_interfaces', () => {\n  const interfaces = Object.keys(os.networkInterfaces());\n  return interfaces.length === 1 && interfaces[0] === 'lo';\n});\nobserve('host_paths_and_marker_absent', () =>\n  ['/var/run/docker.sock', '/home/runner', '/github/workspace'].every(path => !fs.existsSync(path)) &&\n  !Object.hasOwn(process.env, 'HOST_ONLY_MARKER'));\nobserve('resource_limits_observed', () => {\n  const read = name => fs.readFileSync('/sys/fs/cgroup/' + name, 'utf8').trim();\n  return read('memory.max') === '134217728' && read('memory.swap.max') === '0' &&\n    read('pids.max') === '64' && read('cpu.max') === '50000 100000';\n});\nobserve('environment_allowlist', () => {\n  const allowed = new Set(['PATH', 'NODE_VERSION', 'YARN_VERSION', 'HOME', 'HOSTNAME', 'PROBE_PUBLIC_SENTINEL']);\n  return Object.keys(process.env).every(key => allowed.has(key)) && process.env.HOME === '/tmp' &&\n    process.env.PROBE_PUBLIC_SENTINEL === 'public-synthetic';\n});\nconsole.log(JSON.stringify({ scope: 'OWNED_CONTAINER_CONTROL_OBSERVATIONS_ONLY', node_version: process.versions.node, checks }));\n// Report false observations as data. The host gate sets the final result.\n"
-          """Owned container-control experiment. Never loads n8n or project assets."""
+          python3 - <<'OWNED_ENGINE_SMOKE_PY'
+          OWNED_FILES = {'owned_workflow.json': '{\n  "id": "ownedSmoke001",\n  "name": "owned-synthetic-engine-smoke",\n  "active": false,\n  "nodes": [\n    {\n      "id": "manual",\n      "name": "Manual",\n      "type": "n8n-nodes-base.manualTrigger",\n      "typeVersion": 1,\n      "position": [\n        0,\n        0\n      ],\n      "parameters": {}\n    },\n    {\n      "id": "seed",\n      "name": "Seed",\n      "type": "n8n-nodes-base.set",\n      "typeVersion": 1,\n      "position": [\n        200,\n        0\n      ],\n      "parameters": {\n        "keepOnlySet": true,\n        "values": {\n          "number": [\n            {\n              "name": "amount",\n              "value": 7\n            }\n          ],\n          "string": [\n            {\n              "name": "origin",\n              "value": "owned-synthetic"\n            }\n          ]\n        },\n        "options": {}\n      }\n    },\n    {\n      "id": "calculate",\n      "name": "Calculate",\n      "type": "n8n-nodes-base.set",\n      "typeVersion": 1,\n      "position": [\n        400,\n        0\n      ],\n      "parameters": {\n        "keepOnlySet": false,\n        "values": {\n          "number": [\n            {\n              "name": "doubled",\n              "value": "={{$json.amount * 2}}"\n            }\n          ]\n        },\n        "options": {}\n      }\n    }\n  ],\n  "connections": {\n    "Manual": {\n      "main": [\n        [\n          {\n            "node": "Seed",\n            "type": "main",\n            "index": 0\n          }\n        ]\n      ]\n    },\n    "Seed": {\n      "main": [\n        [\n          {\n            "node": "Calculate",\n            "type": "main",\n            "index": 0\n          }\n        ]\n      ]\n    }\n  },\n  "settings": {\n    "executionOrder": "v1",\n    "timezone": "UTC"\n  }\n}\n', 'adapter.cjs': "'use strict';\nconst crypto = require('node:crypto');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst assert = require('node:assert/strict');\nconst { createRequire } = require('node:module');\n\nconst EXPECTED_SHA256 = 'f931461001071966068b0bdd29f7aa58d3f13f9a07c0c1c14ba7dcfe18f4fb32';\nconst NODE_KEYS = ['id', 'name', 'parameters', 'position', 'type', 'typeVersion'];\nconst FLOW_KEYS = ['active', 'connections', 'id', 'name', 'nodes', 'settings'];\nconst ALLOWED = new Set(['n8n-nodes-base.manualTrigger', 'n8n-nodes-base.set']);\nconst sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');\nfunction fail(code) { const error = new Error(code); error.code = code; throw error; }\nfunction exactKeys(value, keys) {\n  return value && typeof value === 'object' && !Array.isArray(value) &&\n    JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());\n}\nfunction validateOwnedWorkflow(bytes) {\n  if (!Buffer.isBuffer(bytes)) fail('INPUT_TYPE_REJECTED');\n  if (bytes.length === 0 || bytes.length > 65536) fail('INPUT_SIZE_REJECTED');\n  let workflow;\n  try { workflow = JSON.parse(bytes.toString('utf8')); } catch { fail('INVALID_JSON'); }\n  if (!exactKeys(workflow, FLOW_KEYS) || workflow.active !== false ||\n      !Array.isArray(workflow.nodes) || workflow.nodes.length !== 3) fail('WORKFLOW_SHAPE_REJECTED');\n  for (const node of workflow.nodes) {\n    if (!exactKeys(node, NODE_KEYS)) fail('NODE_FIELD_REJECTED');\n    if (!ALLOWED.has(node.type) || node.typeVersion !== 1) fail('NODE_TYPE_REJECTED');\n  }\n  const digest = sha256(bytes);\n  if (digest !== EXPECTED_SHA256) fail('FIXTURE_HASH_REJECTED');\n  return { workflow, sha256: digest, contract: {\n    kind: 'OWNED_SYNTHETIC_SMOKE_ONLY', library_workflow_execution_allowed: false,\n    operational_use_allowed: false,\n  } };\n}\n\nasync function runEngineSmoke(bytes) {\n  const admitted = validateOwnedWorkflow(bytes); // Before importing any n8n module.\n  const report = {\n    scope: 'OWNED_SYNTHETIC_REAL_N8N_ENGINE_ONLY', status: 'BLOCKED',\n    fixture_sha256: admitted.sha256, engine_loaded: false, expression_engine_observed: null,\n    engine_attempts: 0, successful_synthetic_executions: 0, executions: [],\n    library_workflows_executed: 0, historical_workflow_test_cases_run: 0,\n    operational_use_allowed: false, module_evidence: {}, phase: 'MODULE_LOAD',\n  };\n  let Expression;\n  try {\n    const cliPath = '/usr/local/lib/node_modules/n8n/package.json';\n    const requireN8n = createRequire(cliPath);\n    const expected = { n8n: '2.45.7', 'n8n-core': '2.45.6', 'n8n-workflow': '2.45.4', 'n8n-nodes-base': '2.45.6' };\n    const packages = {};\n    for (const [name, version] of Object.entries(expected)) {\n      const filename = name === 'n8n' ? cliPath : requireN8n.resolve(name + '/package.json');\n      const raw = fs.readFileSync(filename);\n      const metadata = JSON.parse(raw);\n      if (metadata.name !== name || metadata.version !== version) fail('PACKAGE_VERSION_MISMATCH');\n      packages[name] = { filename, root: path.dirname(filename), metadata };\n      report.module_evidence[name] = { version: metadata.version, package_json_path: filename,\n        package_json_sha256: sha256(raw), declared_license: metadata.license ?? 'UNKNOWN' };\n    }\n    if (Number(process.versions.node.split('.')[0]) < 24) fail('NODE_VERSION_MISMATCH');\n    report.node_version = process.versions.node;\n    requireN8n('reflect-metadata');\n    const { Workflow, Expression: RealExpression } = requireN8n('n8n-workflow');\n    const { WorkflowExecute, ExecutionLifecycleHooks } = requireN8n('n8n-core');\n    Expression = RealExpression;\n    if (typeof WorkflowExecute !== 'function' || typeof Workflow !== 'function') fail('ENGINE_API_MISMATCH');\n    const sourceFiles = {\n      workflow_execute: path.join(packages['n8n-core'].root, 'dist/execution-engine/workflow-execute.js'),\n      manual_trigger: path.join(packages['n8n-nodes-base'].root, 'dist/nodes/ManualTrigger/ManualTrigger.node.js'),\n      set_v1: path.join(packages['n8n-nodes-base'].root, 'dist/nodes/Set/v1/SetV1.node.js'),\n    };\n    report.compiled_source_evidence = Object.fromEntries(Object.entries(sourceFiles).map(([key, file]) =>\n      [key, { path: file, sha256: sha256(fs.readFileSync(file)) }]));\n    const { ManualTrigger } = requireN8n(sourceFiles.manual_trigger);\n    const { SetV1 } = requireN8n(sourceFiles.set_v1);\n    const registered = new Map([\n      ['n8n-nodes-base.manualTrigger', new ManualTrigger()],\n      ['n8n-nodes-base.set', new SetV1({})],\n    ]);\n    const nodeTypes = {\n      getByName(name) { if (!registered.has(name)) fail('NODE_REGISTRY_REJECTED'); return registered.get(name); },\n      getByNameAndVersion(name, version) {\n        if (version !== undefined && version !== 1) fail('NODE_REGISTRY_REJECTED');\n        return this.getByName(name);\n      },\n      getKnownTypes() { return Object.fromEntries([...registered].map(([name, type]) => [name, type.description])); },\n    };\n    report.engine_loaded = true;\n    report.phase = 'EXPRESSION_INITIALIZATION';\n    await Expression.initExpressionEngine({ engine: 'vm', poolSize: 1, maxCodeCacheSize: 100,\n      bridgeTimeout: 2000, bridgeMemoryLimit: 128, lazyAcquire: false, nativeEvaluation: false });\n    report.expression_engine_observed = Expression.getActiveImplementation();\n    if (report.expression_engine_observed !== 'vm') fail('EXPRESSION_ENGINE_MISMATCH');\n    report.phase = 'REAL_ENGINE_EXECUTION';\n    for (let iteration = 1; iteration <= 2; iteration++) {\n      const data = JSON.parse(bytes.toString('utf8'));\n      const workflow = new Workflow({ ...data, nodeTypes });\n      const hooks = new ExecutionLifecycleHooks('manual', 'owned-' + iteration, data);\n      const trace = [];\n      hooks.addHandler('nodeExecuteAfter', (name, execution) => trace.push({ name, status: execution.executionStatus }));\n      const deny = () => fail('CAPABILITY_NOT_AVAILABLE_IN_SMOKE');\n      const additionalData = {\n        hooks, currentNodeExecutionIndex: 0, executionId: 'owned-' + iteration,\n        variables: {}, webhookWaitingBaseUrl: 'http://127.0.0.1/unused',\n        formWaitingBaseUrl: 'http://127.0.0.1/unused',\n        instanceBaseUrl: 'http://127.0.0.1', restApiUrl: 'http://127.0.0.1/unused',\n        credentialsHelper: { getDecrypted: deny, getCredentials: deny, getCredentialsProperties: deny,\n          isCredentialUsableByNode: deny },\n        executeWorkflow: deny, startRunnerTask: deny, getRuntimeCredential: deny,\n      };\n      const executor = new WorkflowExecute(additionalData, 'manual');\n      report.engine_attempts++;\n      const run = await executor.run({ workflow });\n      if (run.finished !== true || run.status !== 'success' || run.data.resultData.error) fail('ENGINE_RUN_FAILED');\n      assert.deepEqual(trace, ['Manual', 'Seed', 'Calculate'].map(name => ({ name, status: 'success' })));\n      const output = run.data.resultData.runData.Calculate[0].data.main[0].map(item => item.json);\n      assert.deepEqual(output, [{ amount: 7, origin: 'owned-synthetic', doubled: 14 }]);\n      report.executions.push({ iteration, mode: 'manual', finished: run.finished, status: run.status,\n        node_trace: trace, output, normalized_output_sha256: sha256(JSON.stringify(output)) });\n      report.successful_synthetic_executions++;\n    }\n    if (report.executions[0].normalized_output_sha256 !== report.executions[1].normalized_output_sha256)\n      fail('REPEATABILITY_MISMATCH');\n    report.status = 'SYNTHETIC_REAL_ENGINE_SMOKE_PASS';\n    report.phase = 'COMPLETE';\n  } catch (error) {\n    report.status = 'BLOCKED';\n    report.error_code = error.code || 'ENGINE_ADAPTER_ERROR';\n    report.error_name = String(error.name || 'Error').slice(0, 80);\n    // Inputs and image are fixed/public synthetic; never include a stack or environment dump.\n    report.error_message = String(error.message || 'Engine adapter failed').slice(0, 400);\n  } finally {\n    if (Expression) {\n      try { await Expression.disposeExpressionEngine(); report.expression_cleanup_confirmed = true; }\n      catch { report.status = 'BLOCKED'; report.expression_cleanup_confirmed = false; }\n    }\n  }\n  return report;\n}\nmodule.exports = { EXPECTED_SHA256, validateOwnedWorkflow, runEngineSmoke };\n", 'runner.cjs': "'use strict';\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst { runEngineSmoke } = require('./adapter.cjs');\n(async () => {\n  let report;\n  try { report = await runEngineSmoke(fs.readFileSync(path.join(__dirname, 'owned_workflow.json'))); }\n  catch (error) { report = { scope: 'OWNED_SYNTHETIC_REAL_N8N_ENGINE_ONLY', status: 'BLOCKED',\n    error_code: error.code || 'INPUT_GATE_FAILED', engine_loaded: false,\n    successful_synthetic_executions: 0, library_workflows_executed: 0,\n    historical_workflow_test_cases_run: 0, operational_use_allowed: false }; }\n  const frame = 'OWNED_N8N_REPORT_V1=' + Buffer.from(JSON.stringify(report)).toString('base64') + '\\n';\n  await new Promise(resolve => process.stdout.write(frame, resolve));\n  process.exit(report.status === 'SYNTHETIC_REAL_ENGINE_SMOKE_PASS' ? 0 : 2);\n})();\n"}
+          """Run only our pinned synthetic n8n engine adapter in a restricted container."""
+          import base64
           import hashlib
           import json
           import os
@@ -28,169 +29,145 @@ jobs:
           import shutil
           import subprocess
           import tempfile
+          import uuid
 
-          IMAGE = 'node@sha256:a43f7fc3e52e87d12a905f46eea0275def84ca8f2981a5b53fed44d7fb398ee0'
-          TMPFS = 'rw,noexec,nosuid,nodev,size=16m,mode=1777'
-          ENV_KEYS = {'PATH', 'NODE_VERSION', 'YARN_VERSION', 'HOME', 'PROBE_PUBLIC_SENTINEL'}
-          CHECKS = {
-              'pinned_node_version', 'non_root_uid_gid', 'no_linux_capabilities',
-              'no_new_privileges', 'root_filesystem_readonly', 'tmpfs_writable_restricted',
-              'only_loopback_interfaces', 'host_paths_and_marker_absent',
-              'resource_limits_observed', 'environment_allowlist',
-          }
+          IMAGE = 'n8nio/n8n@sha256:8e7fd6d66cef92bc0c7c049d456771d9003e9f69f9265c2238ab3f915ddbb080'
+          FIXTURE_SHA = 'f931461001071966068b0bdd29f7aa58d3f13f9a07c0c1c14ba7dcfe18f4fb32'
+          TMPFS = 'rw,noexec,nosuid,nodev,size=64m,mode=1777'
+          OVERRIDES = {'HOME': '/tmp', 'N8N_USER_FOLDER': '/tmp/owned-n8n',
+                       'N8N_DIAGNOSTICS_ENABLED': 'false', 'N8N_VERSION_NOTIFICATIONS_ENABLED': 'false',
+                       'N8N_TEMPLATES_ENABLED': 'false', 'N8N_COMMUNITY_PACKAGES_ENABLED': 'false'}
 
-          class GateError(Exception):
-              pass
+          class GateError(Exception): pass
 
-          def validate_config(info, image_id, source):
-              """Fail closed before docker start; output contains no inspected values."""
-              def require(condition):
-                  if not condition:
-                      raise GateError('CONTAINER_CONFIG_REJECTED')
-              try:
-                  c, h = info['Config'], info['HostConfig']
-                  require(info['Image'] == image_id and info['State']['Status'] == 'created')
-                  require(c['Image'] == IMAGE and c['User'] == '1000:1000')
-                  require(c['Entrypoint'] == ['node'] and c['Cmd'] == ['/probe/runtime_probe.mjs'])
-                  require(c['WorkingDir'] == '/tmp')
-                  require(h['NetworkMode'] == 'none' and h['Privileged'] is False)
-                  require(h['ReadonlyRootfs'] is True and h['CapDrop'] == ['ALL'])
-                  require(not h.get('CapAdd') and h['SecurityOpt'] == ['no-new-privileges:true'])
-                  require(h['PidMode'] == '' and h['IpcMode'] == 'none')
-                  for key, value in {'PidsLimit': 64, 'Memory': 134217728,
-                                     'MemorySwap': 134217728, 'NanoCpus': 500000000}.items():
-                      require(type(h[key]) is int and h[key] == value)
-                  for key in ['PortBindings', 'Devices', 'Binds', 'VolumesFrom', 'ExtraHosts']:
-                      require(not h.get(key))
-                  require(h['Tmpfs'] == {'/tmp': TMPFS})
-                  mounts = info['Mounts']
-                  require(isinstance(mounts, list) and len(mounts) in (1, 2))
-                  binds = [mount for mount in mounts if mount['Type'] == 'bind']
-                  temporary = [mount for mount in mounts if mount['Type'] == 'tmpfs']
-                  require(len(binds) == 1 and len(temporary) <= 1)
-                  require(len(binds) + len(temporary) == len(mounts))
-                  for temporary_mount in temporary:
-                      require(temporary_mount['Destination'] == '/tmp')
-                      require(not temporary_mount.get('Source') and temporary_mount['RW'] is True)
-                  mount = binds[0]
-                  require(mount['Type'] == 'bind' and mount['Source'] == source)
-                  require(mount['Destination'] == '/probe' and mount['RW'] is False)
-                  environment = {}
-                  for entry in c['Env']:
-                      key, value = entry.split('=', 1)
-                      require(key in ENV_KEYS and key not in environment)
-                      environment[key] = value
-                  require(set(environment) == ENV_KEYS)
-                  require(environment['NODE_VERSION'] == '24.22.2')
-                  require(environment['HOME'] == '/tmp')
-                  require(environment['PROBE_PUBLIC_SENTINEL'] == 'public-synthetic')
-                  require(isinstance(environment['PATH'], str) and environment['PATH'])
-                  return True
-              except (KeyError, TypeError, ValueError, AssertionError, AttributeError, IndexError):
-                  raise GateError('CONTAINER_CONFIG_REJECTED') from None
-
-          def run_probe(probe_js):
-              result = {
-                  'scope': 'OWNED_CONTAINER_CONTROL_OBSERVATIONS_ONLY',
-                  'status': 'BLOCKED', 'image_ref': IMAGE, 'image_id': None,
-                  'probe_sha256': hashlib.sha256(probe_js.encode()).hexdigest(),
-                  'configuration_gate_passed': False, 'runtime_checks': {},
-                  'container_cleanup_confirmed': None,
-                  'container_controls_observed': False, 'sandbox_security_verified': False,
-                  'n8n_engine_loaded': False, 'n8n_workflow_tests_run': 0,
-                  'operational_use_allowed': False,
-              }
-              docker = shutil.which('docker')
-              if docker is None:
-                  return {**result, 'blocker': 'DOCKER_MISSING'}
-              with tempfile.TemporaryDirectory(prefix='owned-controls-') as work:
-                  directory = Path(work)
-                  client_home = directory / 'client'
-                  client_home.mkdir()
-                  inputs = directory / 'probe'
-                  inputs.mkdir(mode=0o755)
-                  (inputs / 'runtime_probe.mjs').write_text(probe_js)
-                  (inputs / 'runtime_probe.mjs').chmod(0o644)
-                  environment = {'PATH': os.defpath, 'HOME': str(client_home),
-                                 'DOCKER_CONFIG': str(client_home / 'docker'),
-                                 'HOST_ONLY_MARKER': 'synthetic-do-not-forward'}
-                  def command(arguments, timeout=20):
-                      try:
-                          response = subprocess.run([docker, *arguments], capture_output=True,
-                                                    text=True, timeout=timeout, env=environment,
-                                                    check=False)
-                      except (OSError, subprocess.TimeoutExpired):
-                          raise GateError('DOCKER_COMMAND_ERROR') from None
-                      if response.returncode != 0:
-                          raise GateError('DOCKER_COMMAND_FAILED')
-                      return response.stdout.strip()
-                  container = None
-                  try:
-                      command(['pull', '--platform', 'linux/amd64', IMAGE], timeout=120)
-                      image = json.loads(command(['image', 'inspect', IMAGE]))[0]
-                      image_id = image['Id']
-                      if not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
-                          raise GateError('IMAGE_METADATA_REJECTED')
-                      if image.get('Os') != 'linux' or image.get('Architecture') != 'amd64':
-                          raise GateError('IMAGE_METADATA_REJECTED')
-                      if not any(ref.split('@')[-1] == IMAGE.split('@')[1] for ref in image.get('RepoDigests', [])):
-                          raise GateError('IMAGE_DIGEST_REJECTED')
-                      result['image_id'] = image_id
-                      arguments = ['create', '--pull=never', '--platform=linux/amd64',
-                                   '--network=none', '--read-only', '--cap-drop=ALL',
-                                   '--security-opt=no-new-privileges:true', '--ipc=none',
-                                   '--pids-limit=64', '--memory=128m', '--memory-swap=128m',
-                                   '--cpus=0.5', '--user=1000:1000', '--workdir=/tmp',
-                                   '--tmpfs=/tmp:' + TMPFS,
-                                   '--mount=type=bind,src=' + str(inputs) + ',dst=/probe,readonly',
-                                   '--env=HOME=/tmp', '--env=PROBE_PUBLIC_SENTINEL=public-synthetic',
-                                   '--entrypoint=node', IMAGE, '/probe/runtime_probe.mjs']
-                      container = command(arguments)
-                      if not re.fullmatch(r'[0-9a-f]{64}', container):
-                          raise GateError('CONTAINER_ID_REJECTED')
-                      configuration = json.loads(command(['inspect', container]))[0]
-                      validate_config(configuration, image_id, str(inputs))
-                      result['configuration_gate_passed'] = True
-                      observed = json.loads(command(['start', '--attach', container], timeout=45))
-                      checks = observed.get('checks')
-                      if not isinstance(checks, dict) or set(checks) != CHECKS:
-                          raise GateError('RUNTIME_REPORT_REJECTED')
-                      if any(type(value) is not bool for value in checks.values()):
-                          raise GateError('RUNTIME_REPORT_REJECTED')
-                      result['runtime_checks'] = checks
-                      result['node_version'] = observed.get('node_version')
-                      state = json.loads(command(['inspect', container]))[0]['State']
-                      if not all(checks.values()) or state['ExitCode'] != 0 or state['OOMKilled']:
-                          raise GateError('RUNTIME_CONTROL_CHECK_FAILED')
-                      result['container_controls_observed'] = True
-                      result['status'] = 'ENVIRONMENT_CONTROLS_OBSERVED'
-                  except GateError as error:
-                      result['blocker'] = str(error)
-                  except (KeyError, ValueError, TypeError, IndexError, AttributeError):
-                      result['blocker'] = 'PROBE_RESPONSE_REJECTED'
-                  finally:
-                      if container and re.fullmatch(r'[0-9a-f]{64}', container):
-                          try:
-                              command(['rm', '--force', container])
-                              result['container_cleanup_confirmed'] = True
-                          except GateError:
-                              result['container_cleanup_confirmed'] = False
-                              result['status'] = 'BLOCKED'
-                              result['container_controls_observed'] = False
-                              result['blocker'] = 'CONTAINER_CLEANUP_FAILED'
+          def env_map(entries):
+              result = {}
+              for entry in entries:
+                  key, value = entry.split('=', 1)
+                  if key in result: raise GateError('CONTAINER_CONFIG_REJECTED')
+                  result[key] = value
               return result
 
-          if __name__ == '__main__':
+          def validate_config(info, image_id, source, expected_env):
+              def require(condition):
+                  if not condition: raise GateError('CONTAINER_CONFIG_REJECTED')
+              try:
+                  c,h = info['Config'],info['HostConfig']
+                  require(info['Image']==image_id and info['State']['Status']=='created')
+                  require(c['Image']==IMAGE and c['User']=='1000:1000')
+                  require(c['Entrypoint']==['node'] and c['Cmd']==['--no-node-snapshot','/probe/runner.cjs'] and c['WorkingDir']=='/tmp')
+                  require(h['NetworkMode']=='none' and h['Privileged'] is False and h['ReadonlyRootfs'] is True)
+                  require(h['CapDrop']==['ALL'] and not h.get('CapAdd') and h['SecurityOpt']==['no-new-privileges:true'])
+                  require(h['IpcMode']=='none' and h['PidMode']=='')
+                  for key,value in {'Memory':2147483648,'MemorySwap':2147483648,'PidsLimit':128,'NanoCpus':1000000000}.items():
+                      require(type(h[key]) is int and h[key]==value)
+                  for key in ['PortBindings','Devices','DeviceRequests','Binds','VolumesFrom','ExtraHosts']:
+                      require(not h.get(key))
+                  require(h['Tmpfs']=={'/tmp':TMPFS})
+                  mounts=info['Mounts']
+                  require(isinstance(mounts,list) and len(mounts) in (1,2))
+                  binds=[m for m in mounts if m['Type']=='bind']
+                  temporary=[m for m in mounts if m['Type']=='tmpfs']
+                  require(len(binds)==1 and len(temporary)<=1 and len(binds)+len(temporary)==len(mounts))
+                  require(binds[0]['Source']==source and binds[0]['Destination']=='/probe' and binds[0]['RW'] is False)
+                  for mount in temporary:
+                      require(mount['Destination']=='/tmp' and not mount.get('Source') and mount['RW'] is True)
+                  require(env_map(c['Env'])==expected_env)
+                  return True
+              except (KeyError,TypeError,ValueError,IndexError,AttributeError):
+                  raise GateError('CONTAINER_CONFIG_REJECTED') from None
+
+          def run_smoke(files):
+              result={'scope':'RESTRICTED_REAL_N8N_SYNTHETIC_SMOKE', 'status':'BLOCKED', 'image_ref':IMAGE,
+                'configuration_gate_passed':False, 'container_cleanup_confirmed':None,
+                'engine_report':None, 'library_workflows_executed':0, 'historical_workflow_test_cases_run':0,
+                'operational_use_allowed':False, 'sandbox_security_verified':False}
+              if set(files)!={'owned_workflow.json','adapter.cjs','runner.cjs'}:
+                  return {**result,'blocker':'INPUT_FILE_SET_REJECTED'}
+              if hashlib.sha256(files['owned_workflow.json'].encode()).hexdigest()!=FIXTURE_SHA:
+                  return {**result,'blocker':'FIXTURE_HASH_REJECTED'}
+              result['input_sha256']={name:hashlib.sha256(content.encode()).hexdigest() for name,content in files.items()}
+              docker=shutil.which('docker')
+              if not docker: return {**result,'blocker':'DOCKER_MISSING'}
+              with tempfile.TemporaryDirectory(prefix='owned-engine-') as work:
+                  root=Path(work); inputs=root/'probe'; inputs.mkdir(mode=0o755)
+                  for name,content in files.items():
+                      (inputs/name).write_text(content); (inputs/name).chmod(0o644)
+                  client=root/'client'; client.mkdir()
+                  clean_env={'PATH':os.defpath,'HOME':str(client),'DOCKER_CONFIG':str(client/'docker'),
+                             'HOST_ONLY_MARKER':'synthetic-do-not-forward'}
+                  def command(args,timeout=25,accept_failure=False):
+                      try:
+                          response=subprocess.run([docker,*args],capture_output=True,text=True,timeout=timeout,env=clean_env,check=False)
+                      except (OSError,subprocess.TimeoutExpired): raise GateError('DOCKER_COMMAND_ERROR') from None
+                      if response.returncode and not accept_failure: raise GateError('DOCKER_COMMAND_FAILED')
+                      return response
+                  name='sol-solly-owned-engine-'+uuid.uuid4().hex
+                  create_attempted=False
+                  try:
+                      command(['pull','--platform','linux/amd64',IMAGE],timeout=180)
+                      image=json.loads(command(['image','inspect',IMAGE]).stdout)[0]
+                      image_id=image['Id']
+                      if image.get('Os')!='linux' or image.get('Architecture')!='amd64' or not re.fullmatch(r'sha256:[0-9a-f]{64}',image_id):
+                          raise GateError('IMAGE_METADATA_REJECTED')
+                      if not any(ref.split('@')[-1]==IMAGE.split('@')[1] for ref in image.get('RepoDigests',[])):
+                          raise GateError('IMAGE_DIGEST_REJECTED')
+                      expected_env=env_map(image['Config'].get('Env',[])); expected_env.update(OVERRIDES)
+                      result['image_id']=image_id
+                      args=['create','--name='+name,'--pull=never','--platform=linux/amd64','--network=none',
+                        '--read-only','--cap-drop=ALL','--security-opt=no-new-privileges:true','--ipc=none',
+                        '--memory=2g','--memory-swap=2g','--pids-limit=128','--cpus=1',
+                        '--user=1000:1000','--workdir=/tmp','--tmpfs=/tmp:'+TMPFS,
+                        '--mount=type=bind,src='+str(inputs)+',dst=/probe,readonly','--entrypoint=node']
+                      args.extend('--env='+key+'='+value for key,value in OVERRIDES.items())
+                      args.extend([IMAGE,'--no-node-snapshot','/probe/runner.cjs'])
+                      create_attempted=True
+                      created=command(args).stdout.strip()
+                      if not re.fullmatch(r'[0-9a-f]{64}',created): raise GateError('CONTAINER_ID_REJECTED')
+                      validate_config(json.loads(command(['inspect',name]).stdout)[0],image_id,str(inputs),expected_env)
+                      result['configuration_gate_passed']=True
+                      execution=command(['start','--attach',name],timeout=90,accept_failure=True)
+                      result['container_process_exit_code']=execution.returncode
+                      result['runtime_stdout_sha256']=hashlib.sha256(execution.stdout.encode()).hexdigest()
+                      frames=[line[len('OWNED_N8N_REPORT_V1='):] for line in execution.stdout.splitlines() if line.startswith('OWNED_N8N_REPORT_V1=')]
+                      if len(frames)!=1: raise GateError('RUNTIME_FRAME_REJECTED')
+                      decoded=json.loads(base64.b64decode(frames[0],validate=True))
+                      if decoded.get('scope')!='OWNED_SYNTHETIC_REAL_N8N_ENGINE_ONLY' or decoded.get('fixture_sha256')!=FIXTURE_SHA:
+                          raise GateError('ENGINE_REPORT_REJECTED')
+                      if decoded.get('operational_use_allowed') is not False or decoded.get('library_workflows_executed')!=0:
+                          raise GateError('ENGINE_REPORT_REJECTED')
+                      result['engine_report']=decoded
+                      state=json.loads(command(['inspect',name]).stdout)[0]['State']
+                      if (execution.returncode!=0 or state['ExitCode']!=0 or state['OOMKilled'] or
+                          decoded.get('status')!='SYNTHETIC_REAL_ENGINE_SMOKE_PASS' or
+                          decoded.get('successful_synthetic_executions')!=2):
+                          raise GateError('REAL_ENGINE_SMOKE_FAILED')
+                      result['status']='SYNTHETIC_REAL_ENGINE_SMOKE_PASS'
+                  except GateError as error: result['blocker']=str(error)
+                  except (KeyError,TypeError,ValueError,IndexError,AttributeError): result['blocker']='RESPONSE_REJECTED'
+                  finally:
+                      if create_attempted:
+                          try:
+                              command(['rm','--force',name],accept_failure=True)
+                              remaining=command(['ps','--all','--filter','name=^/'+name+'$','--format','{{.ID}}']).stdout.strip()
+                              result['container_cleanup_confirmed']=remaining==''
+                              if remaining: raise GateError('CONTAINER_CLEANUP_FAILED')
+                          except GateError:
+                              result['container_cleanup_confirmed']=False; result['status']='BLOCKED'
+                              result['blocker']='CONTAINER_CLEANUP_FAILED'
+              return result
+
+          if __name__=='__main__':
               import sys
-              source = globals().get('PROBE_JS')
-              if source is None:
-                  source = Path(__file__).with_name('runtime_probe.mjs').read_text()
-              report = run_probe(source)
-              rendered = json.dumps(report, indent=2, sort_keys=True)
+              files=globals().get('OWNED_FILES')
+              if files is None:
+                  files={name:Path(__file__).with_name(name).read_text() for name in ['owned_workflow.json','adapter.cjs','runner.cjs']}
+              report=run_smoke(files)
+              rendered=json.dumps(report,indent=2,sort_keys=True)
               print(rendered)
               if os.environ.get('GITHUB_STEP_SUMMARY'):
-                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as target:
-                      target.write('## Owned container observations\n\n```json\n' + rendered + '\n```\n')
-              sys.exit(0 if report['status'] == 'ENVIRONMENT_CONTROLS_OBSERVED' else 2)
+                  with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf8') as output:
+                      output.write('## Owned synthetic real n8n engine\n\n```json\n'+rendered+'\n```\n')
+              sys.exit(0 if report['status']=='SYNTHETIC_REAL_ENGINE_SMOKE_PASS' else 2)
 
-          OWNED_CONTROLS_PY
+          OWNED_ENGINE_SMOKE_PY
